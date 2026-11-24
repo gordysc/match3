@@ -55,6 +55,10 @@ struct FrameView {
   int banner_cascade = 0;
   /// @brief Animation clock time when the banner appeared.
   float banner_start = 0.0f;
+  /// @brief Last combo swap, to name in a banner (`Combo::None` = none).
+  Combo combo = Combo::None;
+  /// @brief Animation clock time when the combo went off.
+  float combo_start = -100.0f;
   /// @brief Animation clock time of the last "no moves" shuffle.
   float shuffle_start = -100.0f;
   /// @brief Board offset used to shake the board after big blasts.

@@ -10,11 +10,16 @@ This is a match-3 puzzle game in **C++20** with [raylib](https://www.raylib.com/
   - Match an **L or T shape** to make a **Bomb**. When it clears, it clears the 3x3 square around it.
   - Match 5 in a line to make a **Rainbow**. Swap it with any gem to clear every gem of that colour. Swap two Rainbows to clear the whole board.
   - A blast also sets off the special gems that it hits, so one blast can start a chain.
+- **Combos**: Swap two special gems together to set off a combo. A combo swap does not need to make a match.
+  - Line + Line (**Crossfire**): clears the whole row and the whole column.
+  - Line + Bomb (**Mega Cross**): clears three rows and three columns.
+  - Bomb + Bomb (**Mega Bomb**): clears the 5x5 square around the swap.
+  - Rainbow + Line (**Line Storm**) or Rainbow + Bomb (**Bomb Storm**): every gem of that special's colour turns into that special, and they all go off.
 - **Cascades**: Gems fall into the holes and new gems drop in from the top. Each new match in the same move multiplies its points: x2, x3, and so on.
 - **Three modes**: **Moves** (30 swaps), **Blitz** (90 seconds, the clock starts on your first swap), and **Zen** (no limit).
 - **Never stuck**: A new board has no matches and always has a legal swap. When no swap is left, the board reshuffles. After 7 idle seconds, a hint shows a legal swap.
 - **Colour-blind friendly**: Each colour has its own shape: circle, square, diamond, triangle, hexagon, and pentagon.
-- **Effects**: Sparks, swap and fall animations, beams, shockwaves, screen shake, and cascade banners.
+- **Effects**: Sparks, swap and fall animations, beams, shockwaves, screen shake, and cascade and combo banners.
 - **Procedural audio**: The game synthesizes all of its sounds at startup. On each cascade step the clear chime plays one note higher on a pentatonic scale.
 - **Records**: The game saves the best score, the games played, and the longest cascade for each mode to `~/.match3.cfg`.
 

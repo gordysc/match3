@@ -244,6 +244,129 @@ void TestRainbowSwap() {
          "Two Rainbows clear every gem on the board");
 }
 
+/// @brief Returns an 8x8 layout with no match on it and no special gems.
+///
+/// Cell `(x, y)` gets colour `(x + 2y) % 6`. Neighbours in a row differ by
+/// 1 and neighbours in a column differ by 2, so no three in a line share a
+/// colour.
+/// @return The rows, top row first, for `Board::SetLayout()`.
+std::vector<std::string> NoMatchLayout() {
+  const std::string letters = "ROYGBP";  // Same order as `GemColor`.
+  std::vector<std::string> rows;
+  for (int y = 0; y < 8; ++y) {
+    std::string row;
+    for (int x = 0; x < 8; ++x) {
+      row += letters[static_cast<std::size_t>((x + 2 * y) % 6)];
+    }
+    rows.push_back(row);
+  }
+  return rows;
+}
+
+/// @brief Turns the gem at `at` into `special`, keeping its colour.
+/// @param board Board to change (by non-const reference, so the caller's
+///        board is the one changed).
+/// @param at Cell holding a gem.
+/// @param special Power to give it.
+void MakeSpecial(Board& board, GridPoint at, Special special) {
+  board.SetGem(at, Gem{board.At(at)->color, special});
+}
+
+/// @brief Verifies swapping two special gems sets off the right combo.
+void TestCombos() {
+  using match3::Combo;
+
+  // Which combo each pair makes, in either order.
+  const Gem line{GemColor::Red, Special::LineH};
+  const Gem bomb{GemColor::Red, Special::Bomb};
+  const Gem rainbow{GemColor::Red, Special::Rainbow};
+  const Gem plain{GemColor::Red};
+  Expect(match3::ComboFor(line, bomb) == Combo::BigCross &&
+             match3::ComboFor(bomb, line) == Combo::BigCross,
+         "ComboFor ignores the order of the gems");
+  Expect(match3::ComboFor(rainbow, plain) == Combo::None &&
+             match3::ComboFor(line, plain) == Combo::None,
+         "A special with a plain gem is not a combo");
+  Expect(match3::ComboFor(bomb, rainbow) == Combo::RainbowBomb,
+         "Rainbow + Bomb is a Bomb storm");
+
+  // Line + Line clears the row and the column through the swap.
+  Board board;
+  board.SetLayout(NoMatchLayout());
+  MakeSpecial(board, {3, 3}, Special::LineH);
+  MakeSpecial(board, {4, 3}, Special::LineV);
+  Expect(board.IsLegalSwap({3, 3}, {4, 3}),
+         "Two specials can swap without making a match");
+  Expect(board.FindHint().has_value(), "The hint finder sees combo swaps");
+  Expect(board.ApplySwap({3, 3}, {4, 3}), "The Line + Line swap is made");
+  auto step = board.ClearMatches();
+  Expect(step && step->combo == Combo::Cross, "Line + Line is a Cross");
+  Expect(step && step->cleared.size() == 15,
+         "A Cross clears one row and one column (8 + 8 - 1 gems)");
+  Expect(step && step->blasts.size() == 2, "A Cross fires two beams");
+  Expect(IsEmpty(board, 4, 0) && IsEmpty(board, 0, 3),
+         "The Cross centres on the cell the gem moved into");
+  Expect(!IsEmpty(board, 3, 0), "Cells outside the Cross stay");
+
+  // Line + Bomb clears three rows and three columns.
+  board.SetLayout(NoMatchLayout());
+  MakeSpecial(board, {3, 3}, Special::LineH);
+  MakeSpecial(board, {4, 3}, Special::Bomb);
+  Expect(board.ApplySwap({3, 3}, {4, 3}), "The Line + Bomb swap is made");
+  step = board.ClearMatches();
+  Expect(step && step->combo == Combo::BigCross, "Line + Bomb is a Big Cross");
+  Expect(step && step->cleared.size() == 39,
+         "A Big Cross clears 3 rows and 3 columns (24 + 24 - 9 gems)");
+  Expect(step && step->blasts.size() == 6, "A Big Cross fires six beams");
+  Expect(!IsEmpty(board, 0, 0), "The corner is outside the Big Cross");
+
+  // Bomb + Bomb clears 5x5.
+  board.SetLayout(NoMatchLayout());
+  MakeSpecial(board, {3, 3}, Special::Bomb);
+  MakeSpecial(board, {3, 4}, Special::Bomb);
+  Expect(board.ApplySwap({3, 3}, {3, 4}), "The Bomb + Bomb swap is made");
+  step = board.ClearMatches();
+  Expect(step && step->combo == Combo::MegaBomb, "Bomb + Bomb is a Mega Bomb");
+  Expect(step && step->cleared.size() == 25, "A Mega Bomb clears 5x5");
+  Expect(step && step->blasts.size() == 1 && step->blasts[0].reach == 2,
+         "The Mega Bomb blast reports its bigger reach");
+  Expect(IsEmpty(board, 1, 2) && IsEmpty(board, 5, 6) &&
+             !IsEmpty(board, 0, 4) && !IsEmpty(board, 3, 7),
+         "The 5x5 square centres on the cell the gem moved into");
+
+  // Rainbow + Line or Bomb turns that colour into specials that all go off.
+  for (const Special kind : {Special::LineH, Special::Bomb}) {
+    board.SetLayout(NoMatchLayout());
+    MakeSpecial(board, {3, 3}, Special::Rainbow);
+    MakeSpecial(board, {4, 3}, kind);
+    const GemColor color = board.At({4, 3})->color;
+    int same_color = 0;
+    for (int y = 0; y < 8; ++y) {
+      for (int x = 0; x < 8; ++x) {
+        if (board.At({x, y})->color == color) ++same_color;
+      }
+    }
+    Expect(board.ApplySwap({3, 3}, {4, 3}), "The Rainbow combo swap is made");
+    step = board.ClearMatches();
+    Expect(step && step->combo == (kind == Special::Bomb ? Combo::RainbowBomb
+                                                         : Combo::RainbowLine),
+           "Rainbow + special is a storm");
+    Expect(step && static_cast<int>(step->blasts.size()) == 1 + same_color,
+           "The Rainbow and every gem of the colour go off");
+    bool kinds_match = step.has_value();
+    if (step) {
+      for (std::size_t i = 1; i < step->blasts.size(); ++i) {
+        const Special s = step->blasts[i].special;
+        const bool is_line = s == Special::LineH || s == Special::LineV;
+        kinds_match = kinds_match && (kind == Special::Bomb
+                                          ? s == Special::Bomb
+                                          : is_line);
+      }
+    }
+    Expect(kinds_match, "Every converted gem is the swapped special's kind");
+  }
+}
+
 /// @brief Verifies gravity moves gems down in order and refills the top.
 void TestCollapse() {
   Board board;
@@ -392,6 +515,7 @@ int main() {
   TestLineBlasts();
   TestBombChain();
   TestRainbowSwap();
+  TestCombos();
   TestCollapse();
   TestCascadeMultiplier();
   TestShuffle();

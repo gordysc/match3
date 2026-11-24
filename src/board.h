@@ -36,12 +36,48 @@ struct PlacedGem {
   Gem gem;
 };
 
+/// @brief What happens when the player swaps two special gems together.
+///
+/// A combo swap is always legal, even when it makes no match, and is much
+/// stronger than the two specials going off one after the other.
+enum class Combo : std::uint8_t {
+  /// @brief Not a combo swap.
+  None = 0,
+  /// @brief Line + Line: clears the whole row and the whole column.
+  Cross,
+  /// @brief Line + Bomb: clears three rows and three columns.
+  BigCross,
+  /// @brief Bomb + Bomb: clears the 5x5 square around the swap.
+  MegaBomb,
+  /// @brief Rainbow + Line: every gem of the Line's colour becomes a Line
+  /// gem, and they all go off.
+  RainbowLine,
+  /// @brief Rainbow + Bomb: every gem of the Bomb's colour becomes a Bomb,
+  /// and they all go off.
+  RainbowBomb,
+  /// @brief Rainbow + Rainbow: clears the whole board.
+  DoubleRainbow,
+};
+
+/// @brief Returns the combo that swapping `a` with `b` sets off.
+///
+/// The order of `a` and `b` does not matter. A Rainbow with a plain gem is
+/// not a combo: it is the ordinary Rainbow swap.
+/// @param a One of the two swapped gems.
+/// @param b The other gem.
+/// @return The combo, or `Combo::None` unless both gems are specials.
+Combo ComboFor(const Gem& a, const Gem& b);
+
 /// @brief One special gem going off, so the game can draw its effect.
 struct Blast {
   /// @brief Where the special gem was.
   GridPoint at;
   /// @brief What kind of special it was.
   Special special = Special::None;
+  /// @brief For a Bomb: how many cells the blast reaches from its centre
+  /// (`1` = the usual 3x3 square, `2` = the 5x5 Mega Bomb). Unused for the
+  /// other specials.
+  int reach = 1;
 };
 
 /// @brief Everything one round of clearing did. The Game uses it for score,
@@ -53,6 +89,8 @@ struct ClearStep {
   std::vector<PlacedGem> created;
   /// @brief Special gems that went off, in the order they went off.
   std::vector<Blast> blasts;
+  /// @brief The combo the player's swap set off (only ever on step 1).
+  Combo combo = Combo::None;
   /// @brief 1 for the clear the player's swap made, 2 for the first cascade
   /// after it, and so on.
   int cascade = 1;
@@ -149,8 +187,9 @@ class Board {
 
   /// @brief Swaps two neighbouring gems if the swap is legal.
   ///
-  /// A swap is legal if it makes a match of 3 or more, or if one of the two
-  /// gems is a Rainbow. An illegal swap leaves the board unchanged, so the
+  /// A swap is legal if it makes a match of 3 or more, if one of the two
+  /// gems is a Rainbow, or if both gems are specials (a combo, see `Combo`).
+  /// An illegal swap leaves the board unchanged, so the
   /// Game can animate the gems bouncing back.
   /// @param a Cell the player picked up.
   /// @param b Neighbouring cell (up, down, left, or right of `a`).

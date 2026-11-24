@@ -399,19 +399,60 @@ const char* CheerFor(int cascade) {
   return "NICE!";
 }
 
+/// @brief Returns the banner name for a combo swap.
+/// @param combo Combo that went off.
+/// @return Text to show, or `nullptr` for `Combo::None`. The strings are
+///         literals with static storage, so the pointer never dangles.
+const char* ComboName(Combo combo) {
+  switch (combo) {
+    case Combo::None:
+      return nullptr;
+    case Combo::Cross:
+      return "CROSSFIRE!";
+    case Combo::BigCross:
+      return "MEGA CROSS!";
+    case Combo::MegaBomb:
+      return "MEGA BOMB!";
+    case Combo::RainbowLine:
+      return "LINE STORM!";
+    case Combo::RainbowBomb:
+      return "BOMB STORM!";
+    case Combo::DoubleRainbow:
+      return "BOARD WIPE!";
+  }
+  return nullptr;
+}
+
 /// @brief Draws the cascade cheer and the "shuffling" banner over the board.
 /// @param layout Board placement.
 /// @param view UI state.
 void DrawBanners(const BoardLayout& layout, const FrameView& view) {
   const Vector2 centre = Centre(layout.Bounds());
   const float since = view.now - view.banner_start;
-  if (view.banner_cascade >= 2 && since < kBannerSeconds) {
+  const float since_combo = view.now - view.combo_start;
+  const bool cascade_up = view.banner_cascade >= 2 && since < kBannerSeconds;
+  const bool combo_up = view.combo != Combo::None && since_combo >= 0.0f &&
+                        since_combo < kBannerSeconds;
+  // Only one banner fits over the board, so the newer one wins. A combo
+  // happens on the swap's own clear, so any cascade banner after it is
+  // newer and takes over.
+  const bool show_combo =
+      combo_up && (!cascade_up || view.combo_start >= view.banner_start);
+  // `ColorFromHSV` picks a colour by hue angle; sweeping the hue over
+  // time makes the text cycle through the rainbow.
+  const Color hue =
+      ColorFromHSV(std::fmod(view.now * 240.0f, 360.0f), 0.45f, 1.0f);
+  if (show_combo) {
+    const float grow = EaseOutBack(std::min(since_combo / 0.25f, 1.0f));
+    const float fade =
+        std::clamp((kBannerSeconds - since_combo) / 0.3f, 0.0f, 1.0f);
+    DrawTextShadowed(ComboName(view.combo), {centre.x, centre.y - 24.0f},
+                     static_cast<int>(60.0f * grow), WithAlpha(hue, fade));
+    DrawTextShadowed("COMBO", {centre.x, centre.y + 30.0f},
+                     static_cast<int>(26.0f * grow), WithAlpha(kText, fade));
+  } else if (cascade_up) {
     const float grow = EaseOutBack(std::min(since / 0.25f, 1.0f));
     const float fade = std::clamp((kBannerSeconds - since) / 0.3f, 0.0f, 1.0f);
-    // `ColorFromHSV` picks a colour by hue angle; sweeping the hue over
-    // time makes the text cycle through the rainbow.
-    const Color hue =
-        ColorFromHSV(std::fmod(view.now * 240.0f, 360.0f), 0.45f, 1.0f);
     DrawTextShadowed(CheerFor(view.banner_cascade),
                      {centre.x, centre.y - 24.0f},
                      static_cast<int>(60.0f * grow), WithAlpha(hue, fade));

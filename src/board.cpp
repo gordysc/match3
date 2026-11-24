@@ -105,13 +105,17 @@ bool SwapMakesMatch(Cells& cells, int width, int height, GridPoint a,
   return match;
 }
 
-/// @brief Returns true if either cell holds a Rainbow gem.
+/// @brief Returns true if swapping these two cells is legal even when it
+/// makes no match: one gem is a Rainbow, or both gems are specials (a
+/// combo).
 /// @param a First cell.
 /// @param b Second cell.
-/// @return True when the swap is a Rainbow swap (always legal).
-bool EitherIsRainbow(const std::optional<Gem>& a, const std::optional<Gem>& b) {
-  return (a && a->special == Special::Rainbow) ||
-         (b && b->special == Special::Rainbow);
+/// @return True for a Rainbow swap or a combo swap.
+bool IsFreeSwap(const std::optional<Gem>& a, const std::optional<Gem>& b) {
+  // Both cells must hold a gem: a swap with an empty cell is never legal.
+  if (!a || !b) return false;
+  return a->special == Special::Rainbow || b->special == Special::Rainbow ||
+         ComboFor(*a, *b) != Combo::None;
 }
 
 /// @brief A straight line of 3 or more same-coloured gems.
@@ -326,6 +330,30 @@ std::optional<GemColor> ColorFromLetter(char letter) {
 
 int ScoreFor(int gems, int cascade) { return gems * 10 * std::max(1, cascade); }
 
+Combo ComboFor(const Gem& a, const Gem& b) {
+  // A lambda with an empty capture list `[]` uses nothing from the
+  // enclosing scope, so it behaves like a small local function.
+  const auto is_line = [](Special s) {
+    return s == Special::LineH || s == Special::LineV;
+  };
+  const Special sa = a.special;
+  const Special sb = b.special;
+  if (sa == Special::None || sb == Special::None) return Combo::None;
+
+  // From here on both gems are specials. Each pair is checked in both
+  // orders, so `ComboFor(a, b) == ComboFor(b, a)`.
+  if (sa == Special::Rainbow && sb == Special::Rainbow) {
+    return Combo::DoubleRainbow;
+  }
+  if (sa == Special::Rainbow || sb == Special::Rainbow) {
+    const Special other = sa == Special::Rainbow ? sb : sa;
+    return is_line(other) ? Combo::RainbowLine : Combo::RainbowBomb;
+  }
+  if (is_line(sa) && is_line(sb)) return Combo::Cross;
+  if (sa == Special::Bomb && sb == Special::Bomb) return Combo::MegaBomb;
+  return Combo::BigCross;  // The only pair left: one Line and one Bomb.
+}
+
 int SpecialBonus(Special special) {
   switch (special) {
     case Special::None:
@@ -393,7 +421,7 @@ bool Board::IsLegalSwap(GridPoint a, GridPoint b) const {
   const std::optional<Gem>& gem_a = At(a);
   const std::optional<Gem>& gem_b = At(b);
   if (!gem_a || !gem_b) return false;
-  if (EitherIsRainbow(gem_a, gem_b)) return true;
+  if (IsFreeSwap(gem_a, gem_b)) return true;
   // This method is `const`, so it cannot change `cells_`. It copies the
   // cells into a scratch vector and tries the swap there instead.
   Cells scratch = cells_;
@@ -446,30 +474,130 @@ std::optional<ClearStep> Board::ClearMatches() {
     }
   };
 
-  // 1. A Rainbow swap clears every gem of the other gem's colour. Two
-  //    Rainbows swapped together clear the whole board.
+  // Blast shapes, shared by combos (step 1) and ordinary blasts (step 3).
+  auto mark_row = [&](int row) {
+    if (row < 0 || row >= height_) return;
+    for (int x = 0; x < width_; ++x) mark({x, row});
+  };
+  auto mark_column = [&](int column) {
+    if (column < 0 || column >= width_) return;
+    for (int y = 0; y < height_; ++y) mark({column, y});
+  };
+  // Marks the square of side `2 * reach + 1` centred on `centre`.
+  auto mark_square = [&](GridPoint centre, int reach) {
+    for (int dy = -reach; dy <= reach; ++dy) {
+      for (int dx = -reach; dx <= reach; ++dx) {
+        const GridPoint p{centre.x + dx, centre.y + dy};
+        if (InBounds(p)) mark(p);
+      }
+    }
+  };
+  // Clears a special as part of a combo. It is flagged as detonated
+  // *before* it is marked, so `mark()` does not queue it to go off a second
+  // time on its own in step 3.
+  auto use_up = [&](GridPoint p) {
+    detonated[static_cast<std::size_t>(Index(p))] = 1;
+    mark(p);
+  };
+
+  // 1. Swaps that need no match: a Rainbow with a plain gem clears every
+  //    gem of that gem's colour, and two specials set off a combo.
   if (pending_swap_) {
     const Swap swap = *pending_swap_;
-    const std::optional<Gem>& gem_a = At(swap.a);
-    const std::optional<Gem>& gem_b = At(swap.b);
+    // Copies, not references: the Rainbow combos below rewrite cells, and
+    // these should keep describing the two gems as they were swapped.
+    const std::optional<Gem> gem_a = At(swap.a);
+    const std::optional<Gem> gem_b = At(swap.b);
     const bool rainbow_a = gem_a && gem_a->special == Special::Rainbow;
     const bool rainbow_b = gem_b && gem_b->special == Special::Rainbow;
-    if (rainbow_a && rainbow_b) {
-      for (const GridPoint p : {swap.a, swap.b}) {
-        detonated[static_cast<std::size_t>(Index(p))] = 1;
-        step.blasts.push_back({p, Special::Rainbow});
+    const Combo combo =
+        gem_a && gem_b ? ComboFor(*gem_a, *gem_b) : Combo::None;
+    step.combo = combo;
+    // Combos centre on `b`, the cell the player's gem moved into.
+    const GridPoint centre = swap.b;
+    // For the Rainbow swaps: which cell holds the Rainbow and which the
+    // other gem. With no Rainbow in the swap these are unused.
+    const GridPoint rainbow = rainbow_a ? swap.a : swap.b;
+    const GridPoint other = rainbow_a ? swap.b : swap.a;
+
+    switch (combo) {
+      case Combo::None:
+        if (rainbow_a || rainbow_b) {
+          use_up(rainbow);
+          step.blasts.push_back({rainbow, Special::Rainbow});
+          mark(other);
+          mark_color(At(other)->color);
+        }
+        break;
+      case Combo::DoubleRainbow:
+        for (const GridPoint p : {swap.a, swap.b}) {
+          use_up(p);
+          step.blasts.push_back({p, Special::Rainbow});
+        }
+        for (int y = 0; y < height_; ++y) mark_row(y);
+        break;
+      case Combo::RainbowLine:
+      case Combo::RainbowBomb: {
+        // Turn every plain gem of the other special's colour into that kind
+        // of special, then mark them all. `mark()` queues each one, so
+        // step 3 sets them all off. Gems that are already specials keep
+        // their own power. Line gems alternate between rows and columns in
+        // a checkerboard, so the storm goes both ways.
+        const GemColor color = At(other)->color;
+        const bool lines = combo == Combo::RainbowLine;
+        for (int y = 0; y < height_; ++y) {
+          for (int x = 0; x < width_; ++x) {
+            std::optional<Gem>& cell =
+                cells_[static_cast<std::size_t>(Index({x, y}))];
+            if (!cell || cell->special != Special::None ||
+                cell->color != color) {
+              continue;
+            }
+            if (!lines) {
+              cell->special = Special::Bomb;
+            } else if ((x + y) % 2 == 0) {
+              cell->special = Special::LineH;
+            } else {
+              cell->special = Special::LineV;
+            }
+          }
+        }
+        use_up(rainbow);
+        step.blasts.push_back({rainbow, Special::Rainbow});
+        mark(other);
+        mark_color(color);
+        break;
       }
-      for (int y = 0; y < height_; ++y) {
-        for (int x = 0; x < width_; ++x) mark({x, y});
-      }
-    } else if (rainbow_a || rainbow_b) {
-      const GridPoint rainbow = rainbow_a ? swap.a : swap.b;
-      const GridPoint other = rainbow_a ? swap.b : swap.a;
-      detonated[static_cast<std::size_t>(Index(rainbow))] = 1;
-      step.blasts.push_back({rainbow, Special::Rainbow});
-      mark(rainbow);
-      mark(other);
-      mark_color(At(other)->color);
+      case Combo::Cross:
+        use_up(swap.a);
+        use_up(swap.b);
+        mark_row(centre.y);
+        mark_column(centre.x);
+        step.blasts.push_back({centre, Special::LineH});
+        step.blasts.push_back({centre, Special::LineV});
+        break;
+      case Combo::BigCross:
+        use_up(swap.a);
+        use_up(swap.b);
+        for (int d = -1; d <= 1; ++d) {
+          // One beam per row and column cleared. Each beam starts in line
+          // with the centre, so they all fan out from the swap.
+          if (centre.y + d >= 0 && centre.y + d < height_) {
+            mark_row(centre.y + d);
+            step.blasts.push_back({{centre.x, centre.y + d}, Special::LineH});
+          }
+          if (centre.x + d >= 0 && centre.x + d < width_) {
+            mark_column(centre.x + d);
+            step.blasts.push_back({{centre.x + d, centre.y}, Special::LineV});
+          }
+        }
+        break;
+      case Combo::MegaBomb:
+        use_up(swap.a);
+        use_up(swap.b);
+        mark_square(centre, 2);
+        step.blasts.push_back({centre, Special::Bomb, 2});
+        break;
     }
   }
 
@@ -507,17 +635,13 @@ std::optional<ClearStep> Board::ClearMatches() {
       case Special::None:
         break;
       case Special::LineH:
-        for (int x = 0; x < width_; ++x) mark({x, p.y});
+        mark_row(p.y);
         break;
       case Special::LineV:
-        for (int y = 0; y < height_; ++y) mark({p.x, y});
+        mark_column(p.x);
         break;
       case Special::Bomb:
-        for (int dy = -1; dy <= 1; ++dy) {
-          for (int dx = -1; dx <= 1; ++dx) {
-            if (InBounds({p.x + dx, p.y + dy})) mark({p.x + dx, p.y + dy});
-          }
-        }
+        mark_square(p, 1);
         break;
       case Special::Rainbow: {
         // A Rainbow caught in a blast picks the most common colour that is
@@ -676,7 +800,7 @@ std::optional<Swap> Board::FindHint() const {
       // other cell.
       for (const GridPoint b : {GridPoint{x + 1, y}, GridPoint{x, y + 1}}) {
         if (!InBounds(b) || !At(a) || !At(b)) continue;
-        if (EitherIsRainbow(At(a), At(b)) ||
+        if (IsFreeSwap(At(a), At(b)) ||
             SwapMakesMatch(scratch, width_, height_, a, b)) {
           return Swap{a, b};
         }

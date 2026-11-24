@@ -208,6 +208,10 @@ class Game {
   float banner_start_ = -100.0f;
   /// @brief Animation clock time of the last "no moves" shuffle.
   float shuffle_start_ = -100.0f;
+  /// @brief Last combo the player set off, for its banner.
+  Combo combo_ = Combo::None;
+  /// @brief Animation clock time when `combo_` went off.
+  float combo_start_ = -100.0f;
 
   /// @brief Monotonic counter mixed into seeds so each board is different.
   std::uint32_t seed_counter_ = 1;

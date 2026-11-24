@@ -147,6 +147,8 @@ void Game::Draw() const {
   view.banner_cascade = banner_cascade_;
   view.banner_start = banner_start_;
   view.shuffle_start = shuffle_start_;
+  view.combo = combo_;
+  view.combo_start = combo_start_;
   view.mouse = GetMousePosition();
   if (shake_timer_ > 0.0f) {
     // Two sine waves at different speeds give a rattle that dies down as
@@ -182,6 +184,7 @@ void Game::StartNewGame() {
   banner_cascade_ = 0;
   shuffle_start_ = -100.0f;
   shake_timer_ = 0.0f;
+  combo_ = Combo::None;
   ResetHint();
 
   // Deal the new board in as a diagonal wave from the top-left corner.
@@ -450,7 +453,10 @@ void Game::RunClearStep() {
         break;
       }
       case Special::Bomb:
-        effects_.AddShockwave({blast.at, 1.6f, false, now_});
+        // The ring reaches just past the edge of the square it clears:
+        // radius 1.6 cells for the 3x3 Bomb, 2.6 for the 5x5 Mega Bomb.
+        effects_.AddShockwave(
+            {blast.at, 0.6f + static_cast<float>(blast.reach), false, now_});
         bomb = true;
         break;
       case Special::Rainbow:
@@ -470,7 +476,17 @@ void Game::RunClearStep() {
   if (bomb) audio_.Play(SoundEffect::Bomb);
   if (rainbow) audio_.Play(SoundEffect::Rainbow);
 
-  const float strength = rainbow ? 11.0f : (bomb ? 8.0f : (line ? 4.0f : 0.0f));
+  const bool combo = step->combo != Combo::None;
+  if (combo) {
+    combo_ = step->combo;
+    combo_start_ = now_;
+    // Layer an extra sound on top so a combo sounds bigger than either
+    // special alone.
+    audio_.Play(SoundEffect::Rainbow);
+  }
+
+  float strength = rainbow ? 11.0f : (bomb ? 8.0f : (line ? 4.0f : 0.0f));
+  if (combo) strength = 14.0f;
   if (strength > 0.0f) {
     // A weak blast never cuts a strong shake that is still running short.
     if (shake_timer_ <= 0.0f || strength >= shake_strength_) {
