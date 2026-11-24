@@ -36,6 +36,8 @@ ctest --test-dir build --output-on-failure
 ./build/match3
 ```
 
+Or use the Makefile wrapper: `make run` (build and launch), `make test`, `make clean`.
+
 ## Controls
 
 | Action | Mouse | Keyboard |
